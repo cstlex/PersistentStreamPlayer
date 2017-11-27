@@ -151,6 +151,14 @@
 }
 
 #pragma mark - NSURLConnection delegate
+- (void)connection:(NSURLConnection *)connection willSendRequestForAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge
+{
+    if ([self.delegate respondsToSelector:@selector(persistentStreamPlayerWillSendRequestForAuthenticationChallenge:)]) {
+        [self.delegate persistentStreamPlayerWillSendRequestForAuthenticationChallenge:challenge];
+    }
+
+}
+
 - (void)connection:(NSURLConnection *)connection didReceiveResponse:(NSURLResponse *)response
 {
     self.fullAudioDataLength = 0;
@@ -161,7 +169,9 @@
 - (void)connection:(NSURLConnection *)connection didReceiveData:(NSData *)data
 {
     self.fullAudioDataLength += data.length;
-    [self appendDataToTempFile:data];
+    if (self.response.statusCode == 200) {
+        [self appendDataToTempFile:data];
+    }
     [self processPendingRequests];
 }
 
@@ -184,7 +194,12 @@
 - (BOOL)localFileExists
     {
         //TODO: this should also do some sanity check on the file
-        return [[NSFileManager defaultManager] fileExistsAtPath:self.localURL.path];
+        
+        // Check if the content stored in the file is playable, if not try to get the file from the server again.
+        NSURL *localFileURL = [[NSURL alloc] initFileURLWithPath:self.localURL.path];
+        AVAsset *asset = [AVAsset assetWithURL:localFileURL];
+     
+        return asset.isPlayable ? [[NSFileManager defaultManager] fileExistsAtPath:self.localURL.path] : NO;
     }
 
 - (NSData *)dataFromFileInRange:(NSRange)range
