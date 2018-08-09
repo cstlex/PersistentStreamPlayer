@@ -213,19 +213,29 @@
 #pragma mark - AVURLAsset resource loading
 - (void)processPendingRequests
 {
-    NSMutableArray *requestsCompleted = [NSMutableArray array];
-
-    for (AVAssetResourceLoadingRequest *loadingRequest in self.pendingRequests) {
-        [self fillInContentInformation:loadingRequest.contentInformationRequest];
-
-        BOOL didRespondCompletely = [self respondWithDataForRequest:loadingRequest.dataRequest];
-        if (didRespondCompletely) {
-            [requestsCompleted addObject:loadingRequest];
-            [loadingRequest finishLoading];
+    NSMutableArray *pendingRequests = self.pendingRequests.mutableCopy;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
+        NSMutableArray *requestsCompleted = [NSMutableArray array];
+        
+        for (AVAssetResourceLoadingRequest *loadingRequest in pendingRequests) {
+            BOOL didRespondCompletely = NO;
+            @synchronized (self) {
+                [self fillInContentInformation:loadingRequest.contentInformationRequest];
+                didRespondCompletely = [self respondWithDataForRequest:loadingRequest.dataRequest];
+            }
+            
+            if (didRespondCompletely) {
+                [requestsCompleted addObject:loadingRequest];
+                [loadingRequest finishLoading];
+            }
         }
-    }
-
-    [self.pendingRequests removeObjectsInArray:requestsCompleted];
+        
+        @synchronized (self) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self.pendingRequests removeObjectsInArray:requestsCompleted];
+            });
+        }
+    });
 }
 
 - (void)fillInContentInformation:(AVAssetResourceLoadingContentInformationRequest *)contentInformationRequest
