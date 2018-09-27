@@ -63,8 +63,13 @@
 - (void)prepareToPlay
 {
     self.pendingRequests = [NSMutableArray array];
+    AVURLAsset *asset;
+    if ([self localFileExists]) {
+        asset = [AVURLAsset URLAssetWithURL:self.localURL options:nil];
+    } else {
+        asset = [AVURLAsset URLAssetWithURL:self.audioRemoteStreamingURL options:nil];
+    }
 
-    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:self.audioRemoteStreamingURL options:nil];
     [asset.resourceLoader setDelegate:self queue:dispatch_get_main_queue()];
     AVPlayerItem *playerItem = [AVPlayerItem playerItemWithAsset:asset automaticallyLoadedAssetKeys:@[@"duration"]];
     self.player = [[AVPlayer alloc] initWithPlayerItem:playerItem];
@@ -146,6 +151,14 @@
 }
 
 #pragma mark - NSURLConnection delegate
+- (void)connection:(NSURLConnection *)connection willSendRequestForAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge
+{
+    if ([self.delegate respondsToSelector:@selector(persistentStreamPlayerWillSendRequestForAuthenticationChallenge:)]) {
+        [self.delegate persistentStreamPlayerWillSendRequestForAuthenticationChallenge:challenge];
+    }
+
+}
+
 - (void)connection:(NSURLConnection *)connection didReceiveResponse:(NSURLResponse *)response
 {
     self.fullAudioDataLength = 0;
@@ -156,7 +169,9 @@
 - (void)connection:(NSURLConnection *)connection didReceiveData:(NSData *)data
 {
     self.fullAudioDataLength += data.length;
-    [self appendDataToTempFile:data];
+    if (self.response.statusCode == 200) {
+        [self appendDataToTempFile:data];
+    }
     [self processPendingRequests];
 }
 
@@ -175,6 +190,17 @@
 {
     return [[NSFileManager defaultManager] fileExistsAtPath:self.tempURL.path];
 }
+    
+- (BOOL)localFileExists
+    {
+        //TODO: this should also do some sanity check on the file
+        
+        // Check if the content stored in the file is playable, if not try to get the file from the server again.
+        NSURL *localFileURL = [[NSURL alloc] initFileURLWithPath:self.localURL.path];
+        AVAsset *asset = [AVAsset assetWithURL:localFileURL];
+     
+        return asset.isPlayable ? [[NSFileManager defaultManager] fileExistsAtPath:self.localURL.path] : NO;
+    }
 
 - (NSData *)dataFromFileInRange:(NSRange)range
 {
@@ -198,6 +224,27 @@
     if ([self.delegate respondsToSelector:@selector(persistentStreamPlayerDidPersistAsset:)]) {
         [self.delegate persistentStreamPlayerDidPersistAsset:self];
     }
+}
+
+- (void)connection:(NSURLConnection *)connection
+  didFailWithError:(NSError *)error{
+    
+    for (AVAssetResourceLoadingRequest *loadingRequest in self.pendingRequests) {
+        NSURLComponents * component = [[NSURLComponents alloc] initWithURL:loadingRequest.request.URL resolvingAgainstBaseURL:NO];
+        component.scheme = self.originalURLScheme ?: @"http";
+        
+        if ([component.URL.absoluteString isEqualToString: connection.currentRequest.URL.absoluteString] ) {
+            [loadingRequest finishLoadingWithError:error];
+            [self.pendingRequests removeObject:loadingRequest];
+        }
+    }
+    
+    if ([self.pendingRequests count] == 0) {
+        if ([self.delegate respondsToSelector:@selector(persistentStreamPlayerDidFailToLoadAsset:)]) {
+            [self.delegate persistentStreamPlayerDidFailToLoadAsset:self];
+        }
+    }
+    
 }
 
 - (float)volume
